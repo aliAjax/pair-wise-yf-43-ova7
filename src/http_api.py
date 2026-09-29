@@ -85,6 +85,18 @@ def create_handler(service, rules, static_dir):
                         return self._send_html(200, handle.read())
                 if parts == ["api", "audit"]:
                     return self._send(200, {"items": service.audit_log()})
+                if parts == ["api", "chain"]:
+                    query = parse_qs(parsed.query)
+                    limit_raw = query.get("limit", [None])[0]
+                    limit = int(limit_raw) if limit_raw else None
+                    return self._send(200, {"items": service.chain(limit=limit)})
+                if parts == ["api", "chain", "verify"]:
+                    report = service.verify_chain()
+                    return self._send(200 if report["ok"] else 422, report)
+                if parts == ["api", "chain", "status"]:
+                    return self._send(200, service.chain_status())
+                if len(parts) == 4 and parts[:2] == ["api", "entities"] and parts[3] == "chain":
+                    return self._send(200, {"items": service.chain(entity_id=parts[2])})
                 if len(parts) == 3 and parts[:2] == ["api", "entities"]:
                     return self._send(200, service.get(parts[2]))
                 if len(parts) >= 2 and parts[0] == "api":
@@ -114,9 +126,12 @@ def create_handler(service, rules, static_dir):
                         raise ValidationError("action is required")
                     data = body.pop("data", body)
                     expected = body.pop("expected_version", None)
+                    expected_head = body.pop("expected_head_seq", None)
                     return self._send(
                         200,
-                        service.transition(actor, parts[2], action, data, expected),
+                        service.transition(
+                            actor, parts[2], action, data, expected, expected_head
+                        ),
                     )
                 if len(parts) == 4 and parts[0] == "api" and parts[3] == "actions":
                     body = self._body()
@@ -131,6 +146,7 @@ def create_handler(service, rules, static_dir):
                             action,
                             body.pop("data", body),
                             body.pop("expected_version", None),
+                            body.pop("expected_head_seq", None),
                         ),
                     )
                 if len(parts) == 5 and parts[0] == "api" and parts[4] == "actions":

@@ -27,6 +27,10 @@ class InvalidTransition(DomainError):
     """The requested state transition is not valid."""
 
 
+class ChainBrokenError(DomainError):
+    """The hash chain does not verify at the indicated position."""
+
+
 class Role(str, Enum):
     viewer = "viewer"
     admin = "admin"
