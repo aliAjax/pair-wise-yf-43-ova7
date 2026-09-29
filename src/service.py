@@ -1,8 +1,12 @@
 from uuid import uuid4
 
 from .audit import AuditTrail
-from .domain import ConflictError, NotFoundError
+from .chain import verify_entries
+from .domain import NotFoundError
 from .rules import RuleEngine
+
+# 结果签发时，把设备校准与方法授权的最新结论一并写进同一条链。
+RELEASE_LINKS = ("instrument_id", "method_id")
 
 
 class DomainService:
@@ -28,14 +32,10 @@ class DomainService:
                     return entity
         self.rules.validate_create(actor, kind, payload, self._lookup)
         entity_id = str(payload.pop("id", "") or uuid4())
-        if self.repository.get_entity(entity_id):
-            raise ConflictError("entity already exists: " + entity_id)
         status = self.rules.initial_status(kind)
-        entity = self.repository.create_entity(entity_id, kind, status, payload, actor.user_id)
-        self.audit.record(entity_id, actor, "create", None, status, {"kind": kind})
-        if idempotency_key:
-            self.repository.save_idempotency(actor.user_id, idempotency_key, entity_id)
-        return entity
+        return self.repository.apply_create(
+            entity_id, kind, status, payload, actor.user_id, actor.role, idempotency_key
+        )
 
     def transition(self, actor, entity_id, action, data=None, expected_version=None):
         entity = self.repository.get_entity(entity_id)
@@ -47,16 +47,24 @@ class DomainService:
         )
         merged = dict(entity["data"])
         merged.update(patch)
-        updated = self.repository.update_entity(entity_id, expected, next_status, merged)
-        self.audit.record(
+        links = ()
+        if entity["kind"] == "result" and action == "release":
+            links = tuple(
+                (field.removesuffix("_id"), patch[field])
+                for field in RELEASE_LINKS
+                if patch.get(field)
+            )
+        return self.repository.apply_transition(
             entity_id,
-            actor,
+            expected,
+            next_status,
+            merged,
+            actor.user_id,
+            actor.role,
             action,
-            entity["status"],
-            updated["status"],
             {"patch": patch},
+            links,
         )
-        return updated
 
     def get(self, entity_id):
         entity = self.repository.get_entity(entity_id)
@@ -71,3 +79,17 @@ class DomainService:
 
     def audit_log(self, entity_id=None):
         return self.repository.list_audit(entity_id=entity_id)
+
+    def chain(self, entity_id):
+        self.get(entity_id)
+        return self.repository.list_chain(entity_id)
+
+    def verify_chain(self, entity_id):
+        self.get(entity_id)
+        entries = self.repository.list_chain(entity_id)
+        audit_by_id = {row["id"]: row for row in self.repository.list_audit(entity_id)}
+        return verify_entries(entity_id, entries, audit_by_id, self.repository.chain_hashes)
+
+    def migrate_chains(self):
+        migrated = self.repository.migrate_chains()
+        return {"migrated": len(migrated), "entity_ids": migrated}

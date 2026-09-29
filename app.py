@@ -14,11 +14,20 @@ def main(argv=None):
     parser.add_argument("--db", default="./data.db", help="SQLite database path")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8309)
+    parser.add_argument(
+        "--migrate-chain",
+        action="store_true",
+        help="把历史审计记录按原顺序补成校验链后退出（在线执行，不影响收样）",
+    )
     args = parser.parse_args(argv)
 
     repository = SQLiteRepository(args.db)
     rules = RuleEngine()
     service = DomainService(repository, rules)
+    if args.migrate_chain:
+        result = service.migrate_chains()
+        print("chain migration done: %d entities backfilled" % result["migrated"], flush=True)
+        return 0
     static_dir = Path(__file__).resolve().parent / "static"
     server = create_server(args.host, args.port, service, rules, str(static_dir))
 
